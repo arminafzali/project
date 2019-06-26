@@ -24,6 +24,7 @@ char* sbrk(int);
 int sleep(int);
 int uptime(void);
 int getppid(void);
+int cp(int);
 int wait_and_performance(int*, int*);
 
 // ulib.c

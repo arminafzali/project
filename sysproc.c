@@ -90,6 +90,15 @@ sys_uptime(void)
   return xticks;
 }
 int
+ sys_cp(void)
+{
+
+  int s;
+
+  argint(0, &s);
+  return cp(s);
+}
+int
 sys_getppid(void)
 {
     return myproc()->parent->pid;

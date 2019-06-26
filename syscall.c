@@ -104,6 +104,7 @@ extern int sys_wait(void);
 extern int sys_write(void);
 extern int sys_uptime(void);
 extern int sys_getppid(void);
+extern int sys_cp(void);
 extern int sys_wait_and_performance(void);
 
 static int (*syscalls[])(void) = {
@@ -129,6 +130,7 @@ static int (*syscalls[])(void) = {
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
 [SYS_getppid]   sys_getppid,
+[SYS_cp]     sys_cp,
 [SYS_wait_and_performance]  sys_wait_and_performance,
 };
 extern int sys_getppid(void);
