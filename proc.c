@@ -28,6 +28,16 @@ struct procLog
   int rtime;
   int etime;
 };
+struct procLog log[NPROC];
+
+#ifdef RR
+int sched_option = 1; // defalut value. also meaning RR
+#endif
+
+#ifdef GRT
+int sched_option = 100;
+#endif
+int boot_first = 1;
 
 void
 pinit(void)
@@ -319,6 +329,137 @@ wait(void)
     sleep(curproc, &ptable.lock);  //DOC: wait-sleep
   }
 }
+int wait_and_performance(int *wtime, int *rtime)
+{
+  // copy wait() here and then add some code to fill out pointers
+
+  struct proc *p;
+  int havekids, pid;
+  struct proc *curproc = myproc();
+
+  acquire(&ptable.lock);
+  for(;;){
+    // Scan through table looking for exited children.
+    havekids = 0;
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if(p->parent != curproc)
+        continue;
+      havekids = 1;
+      if(p->state == ZOMBIE){
+        // Found one.
+        // my additions to wait to get performance data
+        *rtime = p->rtime; // value of rtime is now rtime of p
+        *wtime = p->etime - p->rtime - p->ctime; // wait time is end time - create time - run time
+        //
+        pid = p->pid;
+        kfree(p->kstack);
+        p->kstack = 0;
+        freevm(p->pgdir);
+        p->pid = 0;
+        p->parent = 0;
+        p->name[0] = 0;
+        p->killed = 0;
+        p->state = UNUSED;
+        // this function clears the page table
+        // this should have been the reason for ps showing the last end time :)
+        p->etime = 0;
+        p->rtime = 0;
+        p->ctime = 0;
+        // reset to low
+        p->priority = LOW;
+        release(&ptable.lock);
+        return pid;
+      }
+    }
+
+    // No point waiting if we don't have any children.
+    if(!havekids || curproc->killed){
+      release(&ptable.lock);
+      return -1;
+    }
+
+    // Wait for children to exit.  (See wakeup1 call in proc_exit.)
+    sleep(curproc, &ptable.lock);  //DOC: wait-sleep
+  }
+
+}
+void GRT_policy(struct proc *p, struct cpu *c)
+{
+  #ifdef GRT
+
+  struct proc *minP = 0;
+  int min_share = 10000000; // init with a really high value to find the min of shares
+
+  // Loop over process table looking for process to run.
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+  {
+    if(p->state == RUNNABLE)
+      if(minP != 0)
+      {
+        // calculate the share formola
+        int divide_to = ticks - p->ctime;
+        int share = 1000000000;
+        if(0 != divide_to) // handle division by zero :)
+          share = p->rtime / divide_to;
+        if(share < min_share)
+        {
+          min_share = share;
+          minP = p;
+        }
+      }
+      else
+        minP = p;
+    else
+    {
+      continue;
+    }
+  }
+  if(minP != 0) // case a proc was found
+  {
+    p = minP; // dont forget this :)
+
+    // cprintf("process %s with pid %d has been chosen, ctime: %d, rtime: %d \n", p->name, p->pid, p->ctime, p->rtime);
+
+    // Switch to chosen process.  It is the process's job
+    // to release ptable.lock and then reacquire it
+    // before jumping back to us.
+    c->proc = p;
+    switchuvm(p);
+    p->state = RUNNING;
+
+    // ... my code ...
+    // ... ... ...
+
+    swtch(&(c->scheduler), p->context);
+    switchkvm();
+
+    // Process is done running for now.
+    // It should have changed its p->state before coming back.
+    c->proc = 0;
+  }
+  #endif
+
+  // if nothing was defined just return :) or just by reaching the end
+  return;
+}
+int check_high_p_exists(void)
+{
+  struct proc *p;
+
+  // we have acquired the ptalbe lock before calling this
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+  {
+    if(p->state != RUNNABLE)
+      continue;
+
+    if(p->priority == HIGH)
+    {
+      cprintf("this has a high pri %d, %s\n", p->pid, stringFromPriority(p->priority));
+      return 1;
+    }
+  }
+  return -1;
+}
 
 //PAGEBREAK: 42
 // Per-CPU process scheduler.
@@ -341,23 +482,40 @@ scheduler(void)
 
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
-        continue;
 
-      // Switch to chosen process.  It is the process's job
-      // to release ptable.lock and then reacquire it
-      // before jumping back to us.
-      c->proc = p;
-      switchuvm(p);
-      p->state = RUNNING;
+    if(nextpid < 4 && boot_first == 1)
+    {
+        for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+          if(p->state != RUNNABLE)
+            continue;
 
-      swtch(&(c->scheduler), p->context);
-      switchkvm();
+          // Switch to chosen process.  It is the process's job
+          // to release ptable.lock and then reacquire it
+          // before jumping back to us.
+          c->proc = p;
+          switchuvm(p);
+          p->state = RUNNING;
+
+          swtch(&(c->scheduler), p->context);
+          switchkvm();
 
       // Process is done running for now.
       // It should have changed its p->state before coming back.
       c->proc = 0;
+        }
+
+    }
+    else
+    {
+      switch (sched_option)
+      {
+           case 100:
+        GRT_policy(p, c);
+      break;
+      default:
+      break;
+
+      }
     }
     release(&ptable.lock);
 
@@ -541,3 +699,104 @@ procdump(void)
     cprintf("\n");
   }
 }
+void updateProcessStatistics() {
+  struct proc *p;
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    switch(p->state) {
+      // add more cases if needed for other prcess states
+      case RUNNING:
+        p->rtime++;
+        break;
+      default:
+        ;
+    }
+  }
+  release(&ptable.lock);
+}
+
+//current process status
+int cps(int options)
+{
+  struct proc *p;
+
+  // int o = argint(0, &options);
+  int o = options;
+
+  int sleeping = o % 10;
+  int running = (o % 100) / 10;
+  int runable = (o % 1000) / 100;
+  int all = (o % 10000) / 1000;
+  int history = (o % 100000) / 10000;
+  int help = o / 100000;
+
+  // cprintf("inside CPS\n");
+
+  // for(int i = 0; i < 6; i++)
+  // {
+  //   cprintf("%d \t", options[i]);
+  // }
+
+  cprintf("%d", o);
+
+  cprintf("\n");
+
+  // Enable interrupts on this processor.
+  sti();
+
+  // Loop over process table looking for process with pid.
+  acquire(&ptable.lock);
+
+  if(sleeping || running || runable)
+  {
+    cprintf("name \t pid \t state \t\t ctime \t rtime \t etime \t Priority \n");
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+    {
+      if ( p->state == SLEEPING && sleeping == 1 )
+        cprintf("%s \t %d  \t %s \t %d \t %d \t %d \t %s \n", p->name, p->pid, stringFromState(p->state), p->ctime, p->rtime, p->etime, p->priority );
+      if ( p->state == RUNNING && running == 1 )
+        cprintf("%s \t %d  \t %s \t %d \t %d \t %d \t %s \n", p->name, p->pid, stringFromState(p->state), p->ctime, p->rtime, p->etime, p->priority );
+      if ( p->state == RUNNABLE && runable == 1 )
+        cprintf("%s \t %d  \t %s \t %d \t %d \t %d \t %s \n", p->name, p->pid, stringFromState(p->state), p->ctime, p->rtime, p->etime, p->priority );
+    }
+  }
+
+  if(all == 1)
+  {
+    cprintf("name \t pid \t state \t\t ctime \t rtime \t etime \t Priority \n");
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+    {
+      cprintf("%s \t %d  \t %s \t %d \t %d \t %d \n", p->name, p->pid, stringFromState(p->state), p->ctime, p->rtime, p->etime, p->priority );
+    }
+  }
+
+  if(history == 1)
+  {
+    for(int i = 0; i < (nextpid % NPROC); i++)
+    {
+      struct procLog l = log[i];
+      cprintf("%s \t %d \t %d \t %d \t %d \n", l.name, l.pid, l.ctime, l.rtime, l.etime );
+    }
+  }
+
+  if(help == 1)
+  {
+    cprintf(" -s for sleeping\n -r for running\n -run for runnable\n -a for all states (defalut option)\n -h history\n --help for help\n");
+
+    // use for additional help and debuging
+  }
+
+  release(&ptable.lock);
+
+  return 23; // !- maybe 22 should be 23 since this is the 23rd system call
+}
+
+int increment_sched_tickcounter()
+{
+  int returnMe;
+  acquire(&ptable.lock); // crititcal section to use the process table
+  returnMe = ++myproc()->sched_tick_c;
+  release(&ptable.lock);
+  return returnMe;
+}
+
