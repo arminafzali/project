@@ -925,4 +925,7 @@ int increment_sched_tickcounter()
   release(&ptable.lock);
   return returnMe;
 }
-
+int nice(int proc_id)
+{
+  return 1;
+}
