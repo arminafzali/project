@@ -31,11 +31,79 @@ struct procLog
 struct procLog log[NPROC];
 
 #ifdef RR
-int sched_option = 1; // defalut value. also meaning RR
+int sched_option = 1;
 #endif
 
 #ifdef GRT
 int sched_option = 100;
+#endif
+
+#ifdef FRR
+
+
+
+int sched_option = 10;
+
+int queue[NPROC];
+int head_index = -1;
+int tail_index = -1;
+int queue_size()
+{
+  if(tail_index >= head_index)
+    return tail_index - head_index;
+  else
+    return NPROC - (head_index - tail_index);
+}
+
+int q_contains(int proc_id)
+{
+  int q_size = queue_size();
+  for(int i = 0; i < q_size; i++)
+  {
+    if(proc_id == queue[(head_index + i) % NPROC]){
+
+      return (head_index + i) % NPROC;
+    }
+  }
+  return -1;
+}
+
+void print_queue()
+{
+  int size = queue_size();
+
+  cprintf("\n");
+  for(int i = 0; i < size; i++)
+    cprintf("<%d> ", queue[(head_index + i) % NPROC]);
+  cprintf("\n");
+}
+
+void push_a_proc(int proc_id, int print)
+{
+
+  if(0 < q_contains(proc_id))
+    return;
+
+
+  tail_index = (tail_index + 1) % NPROC;
+  queue[tail_index] = proc_id;
+  if(print > 0)
+    print_queue();
+}
+
+int pop_a_proc(void)
+{
+
+  print_queue();
+  head_index = (head_index + 1) % NPROC;
+  return queue[head_index];
+}
+
+int remove(int pid)
+{
+  return 1;
+}
+
 #endif
 int boot_first = 1;
 
@@ -235,6 +303,10 @@ fork(void)
 
   np->state = RUNNABLE;
 
+  #ifdef FRR
+    push_a_proc(np->pid, 1);
+  #endif
+
   release(&ptable.lock);
 
   return pid;
@@ -388,7 +460,7 @@ void GRT_policy(struct proc *p, struct cpu *c)
   #ifdef GRT
 
   struct proc *minP = 0;
-  int min_share = 10000000; // init with a really high value to find the min of shares
+  int min_share = 10000000;
 
   // Loop over process table looking for process to run.
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
@@ -396,7 +468,6 @@ void GRT_policy(struct proc *p, struct cpu *c)
     if(p->state == RUNNABLE)
       if(minP != 0)
       {
-        // calculate the share formola
         int divide_to = ticks - p->ctime;
         int share = 1000000000;
         if(0 != divide_to) // handle division by zero :)
@@ -414,34 +485,51 @@ void GRT_policy(struct proc *p, struct cpu *c)
       continue;
     }
   }
-  if(minP != 0) // case a proc was found
+  if(minP != 0)
   {
-    p = minP; // dont forget this :)
-
-    // cprintf("process %s with pid %d has been chosen, ctime: %d, rtime: %d \n", p->name, p->pid, p->ctime, p->rtime);
-
-    // Switch to chosen process.  It is the process's job
-    // to release ptable.lock and then reacquire it
-    // before jumping back to us.
+    p = minP;
     c->proc = p;
     switchuvm(p);
     p->state = RUNNING;
-
-    // ... my code ...
-    // ... ... ...
-
     swtch(&(c->scheduler), p->context);
     switchkvm();
 
-    // Process is done running for now.
-    // It should have changed its p->state before coming back.
     c->proc = 0;
   }
   #endif
-
-  // if nothing was defined just return :) or just by reaching the end
   return;
 }
+void FRR_policy(struct proc *p, struct cpu *c)
+{
+  #ifdef FRR
+  int this_turn_proc_id;
+
+
+  if(tail_index != head_index) // if queue is not empty
+  {
+    this_turn_proc_id = pop_a_proc();
+  }
+  else
+  {
+    return;
+  }
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+  {
+    if(p->state != RUNNABLE)
+      continue;
+    if(p->pid != this_turn_proc_id)
+      continue;
+    c->proc = p;
+    switchuvm(p);
+    p->state = RUNNING;
+    swtch(&(c->scheduler), p->context);
+    switchkvm();
+    c->proc = 0;
+  }
+  #endif
+  return;
+}
+
 int check_high_p_exists(void)
 {
   struct proc *p;
@@ -479,6 +567,20 @@ scheduler(void)
   for(;;){
     // Enable interrupts on this processor.
     sti();
+        #ifdef FRR
+      if(tail_index == head_index)
+      {
+        acquire(&ptable.lock);
+        for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+        {
+          if(p->state == RUNNABLE)
+          {
+            push_a_proc(p->pid, 1);
+          }
+        }
+        release(&ptable.lock);
+      }
+    #endif
 
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
@@ -509,6 +611,14 @@ scheduler(void)
     {
       switch (sched_option)
       {
+        case 1:
+        RR_policy(p, c);
+      break;
+
+      case 10:
+        FRR_policy(p, c);
+      break;
+
            case 100:
         GRT_policy(p, c);
       break;
@@ -554,6 +664,11 @@ yield(void)
 {
   acquire(&ptable.lock);  //DOC: yieldlock
   myproc()->state = RUNNABLE;
+    myproc()->sched_tick_c = 0;
+
+  #ifdef FRR
+    push_a_proc(myproc()->pid, 1);
+  #endif
   sched();
   release(&ptable.lock);
 }
@@ -627,8 +742,13 @@ wakeup1(void *chan)
   struct proc *p;
 
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == SLEEPING && p->chan == chan)
+    if(p->state == SLEEPING && p->chan == chan){
       p->state = RUNNABLE;
+       #ifdef FRR
+      push_a_proc(p->pid, -1);
+      #endif
+
+    }
 }
 
 // Wake up all processes sleeping on chan.
@@ -654,7 +774,13 @@ kill(int pid)
       p->killed = 1;
       // Wake process from sleep if necessary.
       if(p->state == SLEEPING)
+      {
+        #ifdef FRR
+        push_a_proc(p->pid, 1);
+        #endif
+
         p->state = RUNNABLE;
+      }
       release(&ptable.lock);
       return 0;
     }
@@ -716,7 +842,7 @@ void updateProcessStatistics() {
 }
 
 //current process status
-int cps(int options)
+int cp(int options)
 {
   struct proc *p;
 
