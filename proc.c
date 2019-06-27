@@ -35,15 +35,18 @@ int sched_option = 1;
 #endif
 
 #ifdef GRT
-int sched_option = 100;
+int sched_option = 3;
 #endif
 
 #ifdef FRR
+int sched_option = 2;
+#endif // FRR
 
+#ifdef Q3
+int sched_option = 4;
+#endif
 
-
-int sched_option = 10;
-
+#ifdef FRR
 int queue[NPROC];
 int head_index = -1;
 int tail_index = -1;
@@ -105,8 +108,97 @@ int remove(int pid)
 }
 
 #endif
-int boot_first = 1;
 
+
+#ifdef Q3
+
+// create a queue of pids
+
+int queue[NPROC];
+int head_index = -1;
+int tail_index = -1;
+
+// if queue_size == 0 then the queue is empty
+int queue_size()
+{
+  if(tail_index >= head_index)
+    return tail_index - head_index;
+  else
+    return NPROC - (head_index - tail_index);
+}
+
+int q_contains(int proc_id)
+{
+  int q_size = queue_size();
+  for(int i = 0; i < q_size; i++)
+  {
+    if(proc_id == queue[(head_index + i) % NPROC]){
+      // cprintf("q_contained\n");
+      return (head_index + i) % NPROC;
+    }
+  }
+  return -1;
+}
+
+void print_queue()
+{
+  int size = queue_size();
+
+  // cprintf("here are head, and tail indexes\n");
+  // cprintf("%d\t%d", head_index, tail_index);
+
+  cprintf("\n");
+  for(int i = 0; i < size; i++)
+    cprintf("<%d> ", queue[(head_index + i) % NPROC]);
+  cprintf("\n");
+}
+
+void push_a_proc(int proc_id, int print) // look for instances where a proc was made runnable and push them to queue insted
+{
+  // for some reason bool is unknown : /
+  if(0 < q_contains(proc_id)) // if process exists
+    return;
+
+  // cprintf("pushing\t\t");
+  tail_index = (tail_index + 1) % NPROC;
+  queue[tail_index] = proc_id;
+  if(print > 0)
+    print_queue();
+}
+
+int pop_a_proc(void)  // look for a proc state change to running
+{
+  // cprintf("poping\t\t");
+  print_queue();
+  head_index = (head_index + 1) % NPROC;
+  return queue[head_index];
+}
+
+int remove(int pid)
+{
+  int found_index = q_contains(pid);
+  if( found_index >= 0)
+  {
+    // for(int i = found_index; i < tail_index; i++)
+    // {
+    //   // queue[]
+    // }
+  }
+  else
+  {
+    cprintf("failed to remove cause not in queue: %d", pid);
+    return -1;
+  }
+
+  return 1;
+}
+#endif
+
+#ifdef NBF
+int boot_first = 0;
+#else
+int boot_first = 1;
+#endif
 void
 pinit(void)
 {
@@ -285,9 +377,7 @@ fork(void)
   }
   np->sz = curproc->sz;
   np->parent = curproc;
-  *np->tf = *curproc->tf;
-
-  // Clear %eax so that fork returns 0 in the child.
+  *np->tf = *curproc->tf;1
   np->tf->eax = 0;
 
   for(i = 0; i < NOFILE; i++)
@@ -332,18 +422,12 @@ exit(void)
       curproc->ofile[fd] = 0;
     }
   }
-
   begin_op();
   iput(curproc->cwd);
   end_op();
   curproc->cwd = 0;
-
   acquire(&ptable.lock);
-
-  // Parent might be sleeping in wait().
   wakeup1(curproc->parent);
-
-  // Pass abandoned children to init.
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
     if(p->parent == curproc){
       p->parent = initproc;
@@ -351,15 +435,11 @@ exit(void)
         wakeup1(initproc);
     }
   }
-
-  // Jump into the scheduler, never to return.
   curproc->state = ZOMBIE;
   sched();
   panic("zombie exit");
 }
 
-// Wait for a child process to exit and return its pid.
-// Return -1 if this process has no children.
 int
 wait(void)
 {
@@ -369,14 +449,12 @@ wait(void)
 
   acquire(&ptable.lock);
   for(;;){
-    // Scan through table looking for exited children.
     havekids = 0;
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->parent != curproc)
         continue;
       havekids = 1;
       if(p->state == ZOMBIE){
-        // Found one.
         pid = p->pid;
         kfree(p->kstack);
         p->kstack = 0;
@@ -390,39 +468,29 @@ wait(void)
         return pid;
       }
     }
-
-    // No point waiting if we don't have any children.
     if(!havekids || curproc->killed){
       release(&ptable.lock);
       return -1;
     }
-
-    // Wait for children to exit.  (See wakeup1 call in proc_exit.)
-    sleep(curproc, &ptable.lock);  //DOC: wait-sleep
+    sleep(curproc, &ptable.lock);
   }
 }
 int wait_and_performance(int *wtime, int *rtime)
 {
-  // copy wait() here and then add some code to fill out pointers
-
   struct proc *p;
   int havekids, pid;
   struct proc *curproc = myproc();
 
   acquire(&ptable.lock);
   for(;;){
-    // Scan through table looking for exited children.
     havekids = 0;
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->parent != curproc)
         continue;
       havekids = 1;
       if(p->state == ZOMBIE){
-        // Found one.
-        // my additions to wait to get performance data
-        *rtime = p->rtime; // value of rtime is now rtime of p
-        *wtime = p->etime - p->rtime - p->ctime; // wait time is end time - create time - run time
-        //
+        *rtime = p->rtime;
+        *wtime = p->etime - p->rtime - p->ctime;
         pid = p->pid;
         kfree(p->kstack);
         p->kstack = 0;
@@ -432,37 +500,32 @@ int wait_and_performance(int *wtime, int *rtime)
         p->name[0] = 0;
         p->killed = 0;
         p->state = UNUSED;
-        // this function clears the page table
-        // this should have been the reason for ps showing the last end time :)
         p->etime = 0;
         p->rtime = 0;
         p->ctime = 0;
-        // reset to low
         p->priority = LOW;
         release(&ptable.lock);
         return pid;
       }
     }
 
-    // No point waiting if we don't have any children.
+
     if(!havekids || curproc->killed){
       release(&ptable.lock);
       return -1;
     }
 
-    // Wait for children to exit.  (See wakeup1 call in proc_exit.)
-    sleep(curproc, &ptable.lock);  //DOC: wait-sleep
+
+    sleep(curproc, &ptable.lock);
   }
 
 }
 void GRT_policy(struct proc *p, struct cpu *c)
 {
-  #ifdef GRT
-
   struct proc *minP = 0;
   int min_share = 10000000;
 
-  // Loop over process table looking for process to run.
+
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
   {
     if(p->state == RUNNABLE)
@@ -496,16 +559,15 @@ void GRT_policy(struct proc *p, struct cpu *c)
 
     c->proc = 0;
   }
-  #endif
+
   return;
 }
 void FRR_policy(struct proc *p, struct cpu *c)
 {
-  #ifdef FRR
   int this_turn_proc_id;
 
 
-  if(tail_index != head_index) // if queue is not empty
+  if(tail_index != head_index)
   {
     this_turn_proc_id = pop_a_proc();
   }
@@ -526,10 +588,94 @@ void FRR_policy(struct proc *p, struct cpu *c)
     switchkvm();
     c->proc = 0;
   }
-  #endif
   return;
 }
+void Q3_policy(struct proc *p, struct cpu *c)
+{
+      if(check_high_p_exists() >= 0)
+      {
 
+        struct proc *minP = 0;
+        int min_share = 10000000;
+
+        for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+        {
+
+          if(p->state == RUNNABLE && p->priority == HIGH)
+            if(minP != 0)
+            {
+              int divide_to = ticks - p->ctime;
+              int share = 1000000000;
+              if(0 != divide_to)
+                share = p->rtime / divide_to;
+              if(share < min_share)
+              {
+                min_share = share;
+                minP = p;
+              }
+            }
+            else
+              minP = p;
+          else
+          {
+            continue;
+          }
+        }
+        if(minP != 0)
+        {
+          p = minP;
+
+          c->proc = p;
+          switchuvm(p);
+          p->state = RUNNING;
+
+          swtch(&(c->scheduler), p->context);
+          switchkvm();
+
+          c->proc = 0;
+        }
+      }
+      else if (head_index != tail_index)
+      {
+        int this_turn_proc_id = pop_a_proc();
+
+
+        for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+        {
+          if(p->state != RUNNABLE)
+            continue;
+
+          if(p->pid != this_turn_proc_id)
+            continue;
+
+          c->proc = p;
+          switchuvm(p);
+          p->state = RUNNING;
+
+          swtch(&(c->scheduler), p->context);
+          switchkvm();
+
+          c->proc = 0;
+        }
+      }
+      else
+      {
+        for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+        {
+          if(p->state != RUNNABLE)
+            continue;
+
+          c->proc = p;
+          switchuvm(p);
+          p->state = RUNNING;
+
+          swtch(&(c->scheduler), p->context);
+          switchkvm();
+
+          c->proc = 0;
+        }
+      }
+}
 int check_high_p_exists(void)
 {
   struct proc *p;
@@ -582,6 +728,21 @@ scheduler(void)
       }
     #endif
 
+    #ifdef Q3
+      if(tail_index == head_index)
+      {
+        acquire(&ptable.lock);
+        for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+        {
+          if(p->state == RUNNABLE && p->priority == MID)
+          {
+            push_a_proc(p->pid, 1);
+          }
+        }
+        release(&ptable.lock);
+      }
+    #endif
+
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
 
@@ -615,13 +776,17 @@ scheduler(void)
         RR_policy(p, c);
       break;
 
-      case 10:
+      case 2:
         FRR_policy(p, c);
       break;
 
-           case 100:
+        case 3:
         GRT_policy(p, c);
       break;
+      case 4:
+          Q3_policy(p,c);
+      break;
+
       default:
       break;
 
@@ -668,6 +833,10 @@ yield(void)
 
   #ifdef FRR
     push_a_proc(myproc()->pid, 1);
+  #endif
+   #ifdef Q3
+    if(myproc()->priority == MID)
+      push_a_proc(myproc()->pid, 1);
   #endif
   sched();
   release(&ptable.lock);
@@ -845,34 +1014,17 @@ void updateProcessStatistics() {
 int cp(int options)
 {
   struct proc *p;
-
-  // int o = argint(0, &options);
   int o = options;
-
   int sleeping = o % 10;
   int running = (o % 100) / 10;
   int runable = (o % 1000) / 100;
   int all = (o % 10000) / 1000;
   int history = (o % 100000) / 10000;
   int help = o / 100000;
-
-  // cprintf("inside CPS\n");
-
-  // for(int i = 0; i < 6; i++)
-  // {
-  //   cprintf("%d \t", options[i]);
-  // }
-
   cprintf("%d", o);
-
   cprintf("\n");
-
-  // Enable interrupts on this processor.
   sti();
-
-  // Loop over process table looking for process with pid.
   acquire(&ptable.lock);
-
   if(sleeping || running || runable)
   {
     cprintf("name \t pid \t state \t\t ctime \t rtime \t etime \t Priority \n");
@@ -927,5 +1079,45 @@ int increment_sched_tickcounter()
 }
 int nice(int proc_id)
 {
+    #ifdef Q3
+
+  struct proc *p;
+  int found = 0;
+  acquire(&ptable.lock);
+
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+  {
+    if(p->state == UNUSED)
+      continue;
+    if(p->pid == proc_id)
+    {
+      found = 1;
+      break;
+    }
+  }
+  if(found == 1)
+  {
+    if(p->priority == LOW)
+      cprintf("priority lowest for pid: %d\n", p->pid);
+    if(p->priority == MID) // just gonna handle it later. when i pop it ill ignore the removed ones (aka not priority 2)
+    {
+      p->priority = LOW;
+    }
+    if(p->priority == HIGH)
+    {
+      p->priority = MID;
+      push_a_proc(p->pid, 0);
+    }
+  }
+  else
+  {
+   cprintf("pid not found: %d\n", proc_id);
+   release(&ptable.lock);
+   return 0;
+  }
+  release(&ptable.lock);
+  return 1;
+
+  #endif
   return 1;
 }
