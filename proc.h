@@ -22,7 +22,7 @@ extern int ncpu;
 // Contexts are stored at the bottom of the stack they
 // describe; the stack pointer is the address of the context.
 // The layout of the context matches the layout of the stack in swtch.S
-// at the "Switch stacks" comment. Switch doesn't save eip explicitly,
+// at the "Switch stacks" comUNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIEment. Switch doesn't save eip explicitly,
 // but it is on the stack and allocproc() manipulates it.
 struct context {
   uint edi;
@@ -33,6 +33,20 @@ struct context {
 };
 
 enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+enum proc_priority { HIGH, MID, LOW};
+
+// function to conver enum names to strings - for debugging
+static inline char *stringFromState(enum procstate p){
+  
+  static char *strings[] = { "UNUSED", "EMBRYO", "SLEEPING", "RUNNABLE", "RUNNING", "ZOMBIE" };
+  return strings[p];
+}
+
+static inline char *stringFromPriority(enum proc_priority p){
+  
+  static char *strings[] = { "HIGH", "MID", "LOW" };
+  return strings[p];
+}
 
 // Per-process state
 struct proc {
@@ -49,6 +63,12 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  // my additions
+  int ctime;                   // the creation time of the process
+  int rtime;                   // the run time of the process
+  int etime;                   // end time of the process
+  int sched_tick_c;            // to handle timesliceing :) -> turns 0 when yeilding ?? guess i could have even used runtime with a mod
+  enum proc_priority priority;
 };
 
 // Process memory is laid out contiguously, low addresses first:
@@ -56,3 +76,7 @@ struct proc {
 //   original data and bss
 //   fixed-size stack
 //   expandable heap
+
+// just the definition -- maybe could be moved to defs.h
+void updateProcessStatistics();
+int increment_sched_tickcounter();
