@@ -578,6 +578,7 @@ void GRT_policy(struct proc *p, struct cpu *c)
 }
 void FRR_policy(struct proc *p, struct cpu *c)
 {
+    #ifdef FRR
   int this_turn_proc_id;
 
 
@@ -602,10 +603,12 @@ void FRR_policy(struct proc *p, struct cpu *c)
     switchkvm();
     c->proc = 0;
   }
+  #endif // FRR
   return;
 }
 void Q3_policy(struct proc *p, struct cpu *c)
 {
+    #ifdef Q3
       if(check_high_p_exists() >= 0)
       {
 
@@ -689,6 +692,7 @@ void Q3_policy(struct proc *p, struct cpu *c)
           c->proc = 0;
         }
       }
+      #endif
 }
 int check_high_p_exists(void)
 {
