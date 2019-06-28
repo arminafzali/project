@@ -29,21 +29,21 @@ struct procLog
   int etime;
 };
 struct procLog log[NPROC];
-
+int sched_option = 1 ;
 #ifdef RR
-int sched_option = 1;
+sched_option = 1;
 #endif
 
 #ifdef GRT
-int sched_option = 3;
+sched_option = 3;
 #endif
 
 #ifdef FRR
-int sched_option = 2;
+sched_option = 2;
 #endif // FRR
 
 #ifdef Q3
-int sched_option = 4;
+sched_option = 4;
 #endif
 
 #ifdef FRR
@@ -726,6 +726,7 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
+	p=myproc();
   c->proc = 0;
 
   for(;;){
@@ -790,10 +791,9 @@ scheduler(void)
     {
       switch (sched_option)
       {
-        case 1:
-        RR_policy(p, c);
+      case 1:
+        RR_policy( p, c);
       break;
-
       case 2:
         FRR_policy(p, c);
       break;
