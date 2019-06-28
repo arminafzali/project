@@ -377,7 +377,7 @@ fork(void)
   }
   np->sz = curproc->sz;
   np->parent = curproc;
-  *np->tf = *curproc->tf;1
+  *np->tf = *curproc->tf;
   np->tf->eax = 0;
 
   for(i = 0; i < NOFILE; i++)
