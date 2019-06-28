@@ -520,6 +520,20 @@ int wait_and_performance(int *wtime, int *rtime)
   }
 
 }
+void RR_policy(struct proc *p, struct cpu *c)
+{
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+  {
+    if(p->state != RUNNABLE)
+      continue;
+    c->proc = p;
+    switchuvm(p);
+    p->state = RUNNING;
+    swtch(&(c->scheduler), p->context);
+    switchkvm();
+    c->proc = 0;
+  }
+}
 void GRT_policy(struct proc *p, struct cpu *c)
 {
   struct proc *minP = 0;
